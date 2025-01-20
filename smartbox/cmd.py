@@ -3,6 +3,7 @@ import click
 import json
 import logging
 
+# from smartbox.session import SmartboxSession as Session
 from smartbox.session import Session
 from smartbox.socket import SocketSession
 
@@ -43,6 +44,22 @@ def devices(ctx):
     session = ctx.obj["session"]
     devices = session.get_devices()
     _pretty_print(devices)
+
+
+@smartbox.command(help="Show devices")
+@click.pass_context
+def grouped(ctx):
+    session = ctx.obj["session"]
+    devices = session.get_grouped_devices()
+    _pretty_print(devices)
+
+
+@smartbox.command(help="Show Homes")
+@click.pass_context
+def homes(ctx):
+    session = ctx.obj["session"]
+    homes = session.get_homes()
+    _pretty_print(homes)
 
 
 @smartbox.command(help="Show nodes")

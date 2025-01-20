@@ -3,10 +3,17 @@ import json
 import logging
 import requests
 from requests.adapters import HTTPAdapter
-from requests.packages.urllib3.util.retry import Retry
+from urllib3.util import Retry
 from typing import Any, Dict, List
-
+from warnings import warn
 from smartbox.error import SmartboxError
+from smartbox.device import (
+    Devices,
+    SmartboxDevice,
+)
+from smartbox.node import SmartboxNode
+from smartbox.home import Homes, SmartboxHome
+from smartbox.device import SmartboxDevice
 
 _DEFAULT_RETRY_ATTEMPTS = 5
 _DEFAULT_BACKOFF_FACTOR = 0.1
@@ -15,7 +22,7 @@ _MIN_TOKEN_LIFETIME = 60  # Minimum time left before expiry before we refresh (s
 _LOGGER = logging.getLogger(__name__)
 
 
-class Session(object):
+class SmartboxSession(object):
     def __init__(
         self,
         api_name: str,
@@ -97,8 +104,6 @@ class Session(object):
         return {
             "Authorization": f"Bearer {self._access_token}",
             "Content-Type": "application/json",
-            # TODO: generalise
-            "x-serialid": "5",
         }
 
     def _api_request(self, path: str) -> Any:
@@ -126,34 +131,64 @@ class Session(object):
             raise
         return response.json()
 
-    def get_api_name(self) -> str:
+    @property
+    def api_name(self) -> str:
         return self._api_name
 
-    def get_access_token(self) -> str:
+    @property
+    def access_token(self) -> str:
         return self._access_token
 
-    def get_refresh_token(self) -> str:
+    @property
+    def refresh_token(self) -> str:
         return self._refresh_token
 
-    def get_expiry_time(self) -> datetime.datetime:
+    @property
+    def expiry_time(self) -> datetime.datetime:
         return self._expires_at
 
-    def get_devices(self) -> List[Dict[str, Any]]:
+    def get_devices(self) -> list[SmartboxDevice]:
         response = self._api_request("devs")
-        return response["devs"]
+        devices = Devices.model_validate(response)
+        return [SmartboxDevice(device=device, session=self) for device in devices.devs]
+
+    def get_homes(self) -> list[SmartboxHome]:
+        response = self._api_request("grouped_devs")
+        homes = Homes.model_validate(response)
+        return [SmartboxHome(home=home, session=self) for home in homes.root]
+
+
+class Session(SmartboxSession):
+    # def __init__(self, *args, **kwargs):
+    #     """This throws a deprecation warning on initialization."""
+    #     warn(
+    #         f"{self.__class__.__name__} will be deprecated. Use SmartboxSession instead.",
+    #         DeprecationWarning,
+    #         stacklevel=2,
+    #     )
+    #     super().__init__(*args, **kwargs)
+
+    def get_devices(self) -> List[Dict[str, Any]]:
+        devices = super().get_devices()
+        devices = [device.device.model_dump(mode="json") for device in devices]
+        return devices
 
     def get_grouped_devices(self):
-        response = self._api_request("grouped_devs")
-        return response
+        homes = self.get_homes()
+        homes = [home.devices.model_dump(mode="json")["devs"] for home in homes]
+        return homes
 
     def get_nodes(self, device_id: str) -> List[Dict[str, Any]]:
-        response = self._api_request(f"devs/{device_id}/mgr/nodes")
-        return response["nodes"]
+        device = SmartboxDevice(device=device_id, session=self)
+        return [node.model_dump(mode="json") for node in device.nodes]
 
     def get_status(self, device_id: str, node: Dict[str, Any]) -> Dict[str, str]:
-        return self._api_request(
-            f"devs/{device_id}/{node['type']}/{node['addr']}/status"
-        )
+        node = SmartboxNode(node=node, session=self)
+        node.device = SmartboxDevice(device=device_id, session=self)
+        return node.status.model_dump(mode="json")
+        # return self._api_request(
+        #     f"devs/{device_id}/{node['type']}/{node['addr']}/status"
+        # )
 
     def set_status(
         self,
@@ -179,15 +214,17 @@ class Session(object):
         node: Dict[str, Any],
         setup_args: Dict[str, Any],
     ) -> Dict[str, Any]:
-        data = {k: v for k, v in setup_args.items() if v is not None}
-        # setup seems to require all settings to be re-posted, so get current
-        # values and update
-        setup_data = self.get_setup(device_id, node)
-        setup_data.update(data)
-        return self._api_post(
-            data=setup_data,
-            path=f"devs/{device_id}/{node['type']}/{node['addr']}/setup",
-        )
+        node = SmartboxNode(node=node, session=self)
+        return node.set_status(setup_args=setup_args)
+        # data = {k: v for k, v in setup_args.items() if v is not None}
+        # # setup seems to require all settings to be re-posted, so get current
+        # # values and update
+        # setup_data = self.get_setup(device_id, node)
+        # setup_data.update(data)
+        # return self._api_post(
+        #     data=setup_data,
+        #     path=f"devs/{device_id}/{node['type']}/{node['addr']}/setup",
+        # )
 
     def get_device_away_status(self, device_id: str) -> Dict[str, Any]:
         return self._api_request(f"devs/{device_id}/mgr/away_status")
